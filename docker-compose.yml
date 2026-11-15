@@ -1,0 +1,39 @@
+services:
+  wh-scanner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    shm_size: 1gb
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${WH_BIND:-127.0.0.1}:${WH_PUBLIC_PORT:-8000}:8000"
+    environment:
+      WH_HOST: 0.0.0.0
+      WH_PORT: 8000
+      WH_ROOT: /app
+      WH_DATA_DIR: /app/data
+      WH_WEB_PASSWORD: ${WH_WEB_PASSWORD:?Set a non-empty WH_WEB_PASSWORD in .env}
+      WH_API_KEY: ${WH_API_KEY:-}
+    volumes:
+      - wh-data:/app/data
+      - wh-results:/app/results
+      - wh-thumbnails:/app/.thumb_cache
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  wh-data:
+  wh-results:
+  wh-thumbnails:

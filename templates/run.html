@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Run {{ job.id }} · Signal Desk{% endblock %}
+{% block page_heading %}Run detail{% endblock %}
+{% block body %}
+<section class="hero page-head">
+  <div><p class="eyebrow">JOB MONITOR / <span class="mono">{{ job.id }}</span></p><h2>Run detail</h2><p class="hero-copy">A live record of the submitted workflow. Counts move only when the public source returns an answer.</p></div>
+  <div class="page-actions"><span id="jobBadge"></span><button type="button" class="btn btn-small btn-danger" id="stopJob" hidden>Stop run</button></div>
+</section>
+<section class="card">
+  <div class="section-head"><div><p class="section-kicker">RUN CONTEXT</p><h2 id="jobTitle">Job {{ job.id }}</h2></div><a class="btn btn-small btn-secondary" href="/reports">Open reports</a></div>
+  <div class="detail-strip" id="jobDetails"></div>
+  <p class="inline-note" id="jobMessage"></p>
+  <div id="liveProgress"></div>
+</section>
+<section class="card">
+  <div class="section-head"><div><p class="section-kicker">EXECUTION HISTORY</p><h2>Rounds and artifacts</h2><p>Generated files stay in the self-hosted results volume.</p></div></div>
+  <div id="roundsTable"></div>
+</section>
+<section class="card">
+  <div class="section-head"><div><p class="section-kicker">PROCESS OUTPUT</p><h2>Run log</h2><p>Latest lines are appended while the workflow runs.</p></div></div>
+  <pre class="log" id="jobLog" aria-label="Run log"></pre>
+</section>
+{% endblock %}
+{% block js %}
+<script>
+(function(){
+  const id={{ job.id|tojson }},$=function(name){return document.getElementById(name);};let state='',stopStream=null;
+  function modeName(value){return({verify:'Verify',scan:'Scan',rebuild:'Rebuild',estimate:'Estimate'})[value]||String(value||'—');}
+  function render(job){state=job.status||'';$('jobBadge').innerHTML=badge(state);$('jobTitle').textContent='Job '+job.id;$('jobMessage').textContent=job.message||'No additional message.';const params=job.params||{};const detail=[['Mode',modeName(params.mode)],['Countries',(params.countries||[]).join(', ')||'—'],['Page scope',params.scope==='all'?'All imported page IDs':'Reportable store-linked pages'],['Period',(params.date_from||'latest saved period')+(params.date_to?' → '+params.date_to:'')],['Started',String(job.started||'—').replace('T',' ')],['Network',job.network||'Not reported']];$('jobDetails').innerHTML=detail.map(function(item){return '<div class="detail-item"><span>'+esc(item[0])+'</span><strong>'+esc(item[1])+'</strong></div>';}).join('');const active=job.status==='starting'||job.status==='running';$('stopJob').hidden=!active;$('liveProgress').innerHTML=active?liveHtml(job):'';const rounds=job.rounds||[];$('roundsTable').innerHTML=rounds.length?rounds.map(function(round){const res=round.ended?'Exit '+esc(round.exit)+' · '+(round.report?'report saved':'no report')+(round.reason?'<br>'+esc(round.reason):''):'Running…';const files=(round.files||[]).map(function(file){const href='/files/'+encodeURIComponent(id)+'/round_'+encodeURIComponent(round.n)+'/'+encodeURIComponent(file);return '<a href="'+href+'">'+esc(file)+'</a>'+(String(file).toLowerCase().endsWith('.html')?' · <a href="'+href+'?inline=1" target="_blank" rel="noopener noreferrer">preview</a>':'');}).join('<br>')||'<span class="muted">'+(round.ended?'No artifacts':'Files will appear when the round ends')+'</span>';const unverified=round.summary&&round.summary.unverified_pages!=null?'<br><span class="muted">Unanswered '+esc(round.summary.unverified_pages)+(round.summary.stale_pages?' · stale '+esc(round.summary.stale_pages):'')+'</span>':'';return '<div class="round-row"><span class="round-title">#'+esc(round.n)+'</span><span>'+esc(modeName(round.mode))+'</span><span>'+res+unverified+'<div class="round-files" style="margin-top:6px">'+files+'</div></span></div>';}).join(''):'<div class="empty-state">No execution round has started yet.</div>';if(!stopStream)stopStream=streamLog(id,$('jobLog'),function(){return active;});}
+  async function refresh(){try{const response=await fetch('/api/job/'+encodeURIComponent(id),{cache:'no-store'});if(response.ok)render(await response.json());}catch(_error){}setTimeout(refresh,(state==='running'||state==='starting'||!state)?2500:12000);}
+  $('stopJob').addEventListener('click',async function(){this.disabled=true;try{await fetch('/api/stop',{method:'POST'});}catch(_error){}this.disabled=false;});refresh();
+})();
+</script>
+{% endblock %}

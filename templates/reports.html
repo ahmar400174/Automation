@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Reports · Signal Desk{% endblock %}
+{% block page_heading %}Reports{% endblock %}
+{% block body %}
+<section class="hero"><div><p class="eyebrow">EVIDENCE ARCHIVE</p><h2>Live reports and run history.</h2><p class="hero-copy">The live HTML and Excel reports refresh after verification checkpoints. Completed rounds are retained separately so you can compare day-by-day and run-by-run.</p></div><div class="hero-target"><strong id="reportCount">{{ items|length }} FILES</strong><span id="reportRefresh">Stored locally · auto-refreshes every 5 seconds.</span></div></section>
+<section class="card">
+  <div class="section-head"><div><p class="section-kicker">SAVED OUTPUT</p><h2>Reports</h2><p>Open HTML in a browser; download XLSX for analysis. Reload an open HTML report to see its newest checkpoint.</p></div><a class="btn btn-small btn-secondary" href="/">Back to market desk</a></div>
+  <div id="reportList" aria-live="polite">
+    {% if items %}<div class="report-list">
+      {% for item in items %}
+      <div class="report-row">
+        <div><div class="report-name">{{ item.name }}</div><div class="form-help">{{ item.run_label }}</div></div>
+        <div class="report-type">{{ item.kind|upper }}</div><div class="report-size">{{ item.size_mb }} MB</div><div class="report-time">{{ item.time }}</div>
+        <div class="report-actions">{% if item.kind == 'html' %}<a class="btn btn-small btn-secondary" href="{{ item.open_url }}" target="_blank" rel="noopener noreferrer">Open</a>{% endif %}<a class="btn btn-small" href="{{ item.download_url }}">Download</a></div>
+      </div>
+      {% endfor %}
+    </div>{% else %}<div class="empty-state"><strong>No report files yet.</strong>Run verify on saved page data or scan to import WinningHunter pages. The in-progress run snapshot appears after its first checkpoint.</div>{% endif %}
+  </div>
+</section>
+<section class="card source-card"><div class="source-line"><i></i> INTERPRETATION</div><h3>Verified does not always mean exact.</h3><p>Meta may display rounded counters. A leading ~ means the displayed number is approximate. Unanswered, stale, failed, and confirmed inactive results are not represented as active counts. Explicit Meta rate limits are respected; changing IPs is not used to bypass them.</p></section>
+{% endblock %}
+{% block js %}
+<script>
+(function(){
+  const list=document.getElementById('reportList');
+  const count=document.getElementById('reportCount');
+  const stamp=document.getElementById('reportRefresh');
+  function esc(value){return String(value==null?'':value).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function render(items){
+    count.textContent=items.length+' FILE'+(items.length===1?'':'S');
+    if(!items.length){list.innerHTML='<div class="empty-state"><strong>No report files yet.</strong>The in-progress run snapshot appears after its first checkpoint.</div>';return;}
+    list.innerHTML='<div class="report-list">'+items.map(function(item){
+      const actions=(item.kind==='html'?'<a class="btn btn-small btn-secondary" href="'+esc(item.open_url)+'" target="_blank" rel="noopener noreferrer">Open</a>':'')+'<a class="btn btn-small" href="'+esc(item.download_url)+'">Download</a>';
+      return '<div class="report-row"><div><div class="report-name">'+esc(item.name)+'</div><div class="form-help">'+esc(item.run_label||'Saved report artifact')+'</div></div><div class="report-type">'+esc(String(item.kind||'').toUpperCase())+'</div><div class="report-size">'+esc(item.size_mb)+' MB</div><div class="report-time">'+esc(item.time)+'</div><div class="report-actions">'+actions+'</div></div>';
+    }).join('')+'</div>';
+  }
+  async function refresh(){
+    try{const response=await fetch('/api/reports',{cache:'no-store'});if(!response.ok)throw new Error('Report list refresh failed');const data=await response.json();render(data.items||[]);stamp.textContent='Auto-refreshes every 5 seconds · refreshed '+new Date(data.refreshed_at).toLocaleTimeString();}
+    catch(error){stamp.textContent='Live refresh temporarily unavailable · retrying';}
+  }
+  refresh();setInterval(refresh,5000);
+})();
+</script>
+{% endblock %}

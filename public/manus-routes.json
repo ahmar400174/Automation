@@ -1,0 +1,1 @@
+{"routes":[{"path":"/","title":"Market desk"},{"path":"/runs/:job_id","title":"Run detail"},{"path":"/reports","title":"Reports"},{"path":"/reports/:name","title":"Saved report"},{"path":"/activity","title":"Activity memory"},{"path":"/settings","title":"Settings"}]}

@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+data/
+results/
+work/
+run_artifact/
+.thumb_cache/
+.env
+.env.*
+!.env.example
+*.zip
+*.log
+known_sheet.csv
+tor/
+.railway-cli/

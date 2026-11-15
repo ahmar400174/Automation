@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Activity memory · Signal Desk{% endblock %}
+{% block page_heading %}Activity memory{% endblock %}
+{% block body %}
+<section class="hero page-head">
+  <div><p class="eyebrow">PERSISTENT JOB JOURNAL</p><h2>Every run, in order.</h2><p class="hero-copy">A durable timeline of job starts, country checks, cooldowns, report saves, and outcomes. Entries link back to the full run record.</p></div>
+  <div class="page-actions"><a class="btn btn-small btn-secondary" href="/">Back to market desk</a></div>
+</section>
+<section class="card">
+  <div class="section-head"><div><p class="section-kicker">ACTIVITY MEMORY</p><h2 id="activityCount">Loading timeline…</h2><p>Stored on this self-hosted installation; refresh to see the latest activity.</p></div></div>
+  <div class="board-toolbar"><label class="search-wrap"><span class="search-glyph" aria-hidden="true">⌕</span><input id="activitySearch" class="input" type="search" placeholder="Search jobs, countries, or actions" autocomplete="off"></label><button class="btn btn-small btn-secondary" id="refreshActivity" type="button">Refresh</button></div>
+  <div class="activity-timeline" id="activityTimeline" aria-live="polite"><div class="empty-state">Loading saved events…</div></div>
+</section>
+{% endblock %}
+{% block js %}
+<script>
+(function(){
+  const $=function(id){return document.getElementById(id);};let all=[];
+  function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+  function render(){const q=$('activitySearch').value.trim().toLowerCase();const rows=all.filter(function(e){return !q||[e.title,e.detail,e.job_id,e.mode,(e.countries||[]).join(' '),e.status].join(' ').toLowerCase().includes(q);});$('activityCount').textContent=rows.length+' event'+(rows.length===1?'':'s')+' · '+all.length+' saved';$('activityTimeline').innerHTML=rows.length?rows.map(function(e){const country=(e.countries||[]).join(', ');return '<article class="activity-event"><div class="activity-time">'+esc(e.at||'Time not recorded')+'</div><div class="activity-marker '+esc(e.kind||'job')+'" aria-hidden="true"></div><div class="activity-copy"><div class="activity-title-row"><h3>'+esc(e.title||'Activity')+'</h3><span class="state-badge '+esc(e.status||'')+'">'+esc(e.status||'recorded')+'</span></div><p>'+esc(e.detail||'')+'</p><div class="activity-meta"><span>'+esc(e.mode||'')+(country?' · '+esc(country):'')+'</span><a href="'+esc(e.href||'/')+'">Open run '+esc(e.job_id||'')+' ↗</a></div></div></article>';}).join(''):'<div class="empty-state"><strong>No matching activity</strong>Try another search or start a run from the Market desk.</div>';}
+  async function load(){try{const response=await fetch('/api/activity?limit=500',{cache:'no-store'});if(!response.ok)throw new Error('Timeline unavailable');const data=await response.json();all=data.events||[];render();}catch(error){$('activityTimeline').innerHTML='<div class="notice error">'+esc(error.message)+'</div>';}}
+  $('activitySearch').addEventListener('input',render);$('refreshActivity').addEventListener('click',load);load();setInterval(load,15000);
+})();
+</script>
+{% endblock %}

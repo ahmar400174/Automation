@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Settings · Signal Desk{% endblock %}
+{% block page_heading %}Settings{% endblock %}
+{% block body %}
+<section class="hero"><div><p class="eyebrow">LOCAL CONFIGURATION</p><h2>Keep the source and the system honest.</h2><p class="hero-copy">Credentials stay on this host. Meta verification uses public Ad Library pages. No Facebook login, identity, or API token is requested.</p></div></section>
+{% if saved %}<div class="notice ok" role="status"><strong>Settings saved.</strong> Updated local configuration is ready for the next run.</div>{% endif %}
+{% if not tor_found %}<div class="notice info"><strong>Tor is not detected on this host.</strong> Verification can still use the ordinary network route. On the Docker package, install Tor in the image or host and set its path if needed; Tor is optional and does not guarantee access or speed.</div>{% endif %}
+<form method="post" action="/settings" autocomplete="off">
+  <section class="card settings-section">
+    <div class="section-head"><div><p class="section-kicker">OPTIONAL SCAN CREDENTIAL</p><h2>WinningHunter API</h2><p>Only estimate and scan modes need this key. Verify and rebuild do not call WinningHunter.</p></div></div>
+    <div class="form-field"><label for="apiKey">API key {% if key_mask %}<span class="field-hint">Saved value: {{ key_mask }} · blank keeps it</span>{% endif %}</label><input class="input" type="password" id="apiKey" name="WH_API_KEY" autocomplete="new-password" placeholder="{{ 'Leave blank to keep the saved key' if key_mask else 'Paste key for scan / estimate only' }}"></div>
+    {% if key_mask %}<label class="check-row"><input type="checkbox" name="clear_key" value="on"><span>Remove the saved WinningHunter key</span></label>{% endif %}
+    <p class="inline-note">The server never returns the full saved key to the page. Scan and estimate calls may consume API credits according to the client’s WinningHunter account.</p>
+  </section>
+
+  <section class="card settings-section">
+    <div class="section-head"><div><p class="section-kicker">PUBLIC-SOURCE VERIFICATION</p><h2>Freshness and concurrency</h2><p>Direct host networking is the default. The linked meta_ads_verifier package checks the public Ad Library first and writes into the same cache. Pages it cannot read stay with the browser verifier. No Facebook login and no WinningHunter credit.</p></div></div>
+    <div class="settings-grid">
+      <div class="form-field"><label for="freshHours">Reuse an answer for</label><div class="field-inline"><input class="input" type="number" id="freshHours" name="fresh_hours" min="1" max="8760" value="{{ s.fresh_hours }}"><span class="unit-label">hours</span></div><p class="form-help">Older results are marked stale and checked again.</p></div>
+      <div class="form-field"><label for="workers">Browser tabs per country <span class="field-hint">1–4 hard cap</span></label><input class="input" type="number" id="workers" name="verify_workers" min="1" max="4" value="{{ s.verify_workers }}"><p class="form-help">A country may use up to four tabs; all active countries share a five-tab overall maximum. Meta may respond more slowly or throttle parallel requests.</p></div>
+      <div class="form-field"><label for="countryWorkers">Countries in parallel <span class="field-hint">1–5 hard cap</span></label><input class="input" type="number" id="countryWorkers" name="country_workers" min="1" max="5" value="{{ s.country_workers }}"><p class="form-help">Up to five country queues share the same five-tab total cap. The scheduler distributes slots by selected-country count.</p></div>
+      <div class="form-field"><label for="gap">Base gap per tab</label><div class="field-inline"><input class="input" type="number" id="gap" name="verify_gap" min="0.25" max="10" step="0.05" value="{{ s.verify_gap }}"><span class="unit-label">seconds</span></div><p class="form-help">Request delay is jittered and bounded to 0.5–1.5 seconds. Explicit source cooldowns can take longer than 60 seconds and are not bypassed.</p></div>
+      <div class="form-field"><label>Rate-limit failover</label><label class="check-row"><input type="checkbox" name="tor_failover" value="on" {% if s.tor_failover %}checked{% endif %}><span>Direct (fast) normally; switch to Tor while Meta rate-limits, return to direct when it clears</span></label><p class="form-help">Needs Tor installed. Ignored when "Use one steady local Tor route" is on.</p></div>
+      <div class="form-field"><label>Network route</label><label class="check-row"><input type="checkbox" name="use_tor" value="on" {% if s.use_tor %}checked{% endif %}><span>Use one steady local Tor route (off by default)</span></label><p class="form-help">When unchecked, Playwright uses the host's direct outbound route. Direct routing may reduce latency; Meta may still rate-limit it. No IP or exit rotation is used.</p></div>
+    </div>
+    <div class="form-field" style="margin-top:14px"><label for="torPath">Tor executable path <span class="field-hint">blank = auto-detect</span></label><input class="input" type="text" id="torPath" name="tor_path" value="{{ s.tor_path }}" placeholder="/usr/bin/tor or C:\\Tor\\tor.exe"></div>
+    <p class="inline-note">Routine automatic re-checks use a 60-second pause. A longer Meta rate-limit cooldown takes precedence. Speed depends on Meta, host resources, and the network; progress shows measured successful answers only.</p>
+  </section>
+
+  <section class="card settings-section">
+    <div class="section-head"><div><p class="section-kicker">LOCAL ACCESS</p><h2>Web password</h2><p>Required whenever the service is bound to a non-local network interface.</p></div></div>
+    {% if password_from_env %}<div class="code-note">WH_WEB_PASSWORD is supplied by the environment. It is not editable from this form.</div>
+    {% else %}<div class="form-field"><label for="webPassword">Password {% if pw_set %}<span class="field-hint">Set · leave blank to keep</span>{% endif %}</label><input class="input" type="password" id="webPassword" name="web_password" autocomplete="new-password" placeholder="{{ 'Leave blank to keep the current password' if pw_set else 'Set a strong local password if exposing this app' }}"></div>{% if pw_set %}<label class="check-row"><input type="checkbox" name="clear_password" value="on"><span>Remove the saved password (local-only binding only)</span></label>{% endif %}{% endif %}
+    <p class="inline-note">For remote access, use HTTPS through a trusted reverse proxy. Basic authentication over plain HTTP does not encrypt credentials.</p>
+  </section>
+
+  <section class="card settings-section">
+    <div class="section-head"><div><p class="section-kicker">RUNNER</p><h2>Pre-run checks</h2><p>Verification does not require running the test suite for each job. Pre-run tests can add over a minute of startup time.</p></div></div>
+    <label class="check-row"><input type="checkbox" name="run_tests" value="on" {% if s.run_tests %}checked{% endif %}><span>Run built-in tests before each workflow (recommended off for routine production runs).</span></label>
+  </section>
+  <div class="row-actions"><button class="btn btn-primary" type="submit">Save settings</button><a class="btn btn-secondary" href="/">Return to market desk</a></div>
+</form>
+{% endblock %}

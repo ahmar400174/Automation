@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#13191b">
+  <meta name="robots" content="noindex,nofollow">
+  <title>{% block title %}Signal Desk · Meta Ad Research{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to workspace</a>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Main navigation">
+      <a class="brand" href="/" aria-label="Signal Desk home">
+        <span class="brand-mark" aria-hidden="true"><i></i><b></b></span>
+        <span class="brand-copy"><strong>SIGNAL DESK</strong><small>COMPETITOR RESEARCH</small></span>
+      </a>
+      <div class="nav-label">WORKSPACE</div>
+      <nav class="primary-nav">
+        <a href="/" class="nav-link {{ 'active' if request.path == '/' else '' }}" {% if request.path == '/' %}aria-current="page"{% endif %}>
+          <span class="nav-icon" aria-hidden="true">▦</span><span>Market desk</span><span class="nav-arrow">↗</span>
+        </a>
+        <a href="/reports" class="nav-link {{ 'active' if request.path.startswith('/reports') else '' }}" {% if request.path.startswith('/reports') %}aria-current="page"{% endif %}>
+          <span class="nav-icon" aria-hidden="true">▤</span><span>Reports</span><span class="nav-arrow">↗</span>
+        </a>
+        <a href="/activity" class="nav-link {{ 'active' if request.path == '/activity' else '' }}" {% if request.path == '/activity' %}aria-current="page"{% endif %}>
+          <span class="nav-icon" aria-hidden="true">◷</span><span>Activity memory</span><span class="nav-arrow">↗</span>
+        </a>
+        <a href="/settings" class="nav-link {{ 'active' if request.path == '/settings' else '' }}" {% if request.path == '/settings' %}aria-current="page"{% endif %}>
+          <span class="nav-icon" aria-hidden="true">⚙</span><span>Settings</span><span class="nav-arrow">↗</span>
+        </a>
+      </nav>
+      <div class="sidebar-spacer"></div>
+      <section class="sidebar-source" aria-label="Data source">
+        <span class="source-indicator"><i></i>PUBLIC SOURCE</span>
+        <strong>Meta Ad Library</strong>
+        <p>Counts are shown as Meta reports them. A leading <code>~</code> means rounded.</p>
+      </section>
+      <div class="sidebar-foot"><span class="local-mark"></span><span>Private workspace</span><span class="side-version">v1</span></div>
+    </aside>
+
+    <main class="app-main" id="main-content">
+      <header class="topbar">
+        <div class="topbar-context"><span class="topbar-kicker">INDEPENDENT RESEARCH CONSOLE</span><h1>{% block page_heading %}Market desk{% endblock %}</h1></div>
+        <div class="topbar-status"><span class="lock-mark" aria-hidden="true">▣</span><span>NO FACEBOOK LOGIN</span><span class="topbar-divider"></span><span class="status-live"><i></i> LOCAL WORKSPACE</span></div>
+      </header>
+      <div class="page-content">
+        {% block body %}{% endblock %}
+      </div>
+      <footer class="app-footer"><span>Signal Desk</span><span>WinningHunter discovery · Meta public verification</span><span>Evidence first. No guessed counts.</span></footer>
+    </main>
+  </div>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  {% block js %}{% endblock %}
+</body>
+</html>

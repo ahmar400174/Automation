@@ -1,0 +1,358 @@
+name: Weekly competitor scan
+
+# Started by hand from the "Run workflow" button.
+#   mode = estimate -> only counts the ads and the credits needed (1 credit per country, no scan)
+#   mode = scan     -> full scan, then the verified Excel + HTML dashboard
+#   mode = rebuild  -> no scan at all: rebuild the workbooks and the dashboard from results/scan_data
+#                      Pages without a fresh answer are now checked live on Meta too (like "verify"); when
+#                      every page already has an answer nothing is asked and the rebuild stays fast.
+#   mode = verify   -> no scan, NO API credit: take results/scan_data and check every page that has no fresh
+#                      answer on the Meta Ad Library, then rebuild. This is the mode that fills the missing
+#                      "Active Ads" numbers.
+#
+# AUTOMATIC ROUNDS: Meta blocks the IP of a runner after a few hundred checks, and every new run starts on a NEW
+# machine (new IP). When a run ends with pages still unverified it therefore starts the next "verify" run BY
+# ITSELF (same dates, same countries) and so on, until every page is verified or a safety limit is reached
+# (8 hours since the first run, 15 rounds, or 2 rounds in a row without progress). See chain_control.py.
+# Cancelling a run stops the chain.
+#
+# Every run is isolated: the workspace is wiped first, the artifact is named after the run, and the
+# artifact only ever contains files produced by THIS run (the manifest must carry this run's id).
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "estimate = credits only (no report) / scan = full scan + every page verified on Meta / rebuild = rebuild the report from saved data and verify the missing pages (no credits) / verify = same as rebuild"
+        type: choice
+        options:
+          - estimate
+          - scan
+          - rebuild
+          - verify
+        default: estimate
+      date_from:
+        description: "From date, format YYYY-MM-DD (empty = last week Monday)"
+        default: ""
+      date_to:
+        description: "To date, format YYYY-MM-DD (empty = last week Sunday)"
+        default: ""
+      countries:
+        description: "Countries, comma separated"
+        default: "US,FR,IT,ES,GB,NL"
+      max_calls:
+        description: "Max calls per country (5000 = full scan; a small number such as 20 is only a smoke test and ends as incomplete)"
+        default: "5000"
+
+permissions:
+  contents: write
+  actions: write            # lets the run start the next automatic verification round by itself
+
+concurrency:
+  group: wh-weekly-scan
+  cancel-in-progress: false
+
+env:
+  MODE: ${{ github.event.inputs.mode || 'estimate' }}
+  DATE_FROM: ${{ github.event.inputs.date_from }}
+  DATE_TO: ${{ github.event.inputs.date_to }}
+  COUNTRIES: ${{ github.event.inputs.countries || 'US,FR,IT,ES,GB,NL' }}
+  MAX_CALLS: ${{ github.event.inputs.max_calls || '5000' }}
+  # Technical settings the client does not need to see: fixed here in the backend.
+  RESUME: "false"          # always a clean scan from zero
+  KEEP_ALL: "false"        # fashion competitors only (the default rule)
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # The browser is only needed for the live Meta verification (scan / verify). Its download is cached:
+      # "install" then only checks the cache instead of downloading ~150 MB again.
+      - name: Chain - is this a new run or an automatic continuation?
+        if: env.MODE != 'estimate'
+        run: python chain_control.py begin
+
+      - name: Cache the browser
+        if: env.MODE != 'estimate'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install the browser used for live verification (optional)
+        if: env.MODE != 'estimate'
+        continue-on-error: true
+        run: python -m playwright install --with-deps chromium
+
+      # UPDATED LOGIC: FREE rotating IPs. One Tor per scanned country, exit node in THAT country
+      # ({us} {fr} {it} {es} {gb} {nl}); the verifier asks Tor for a new exit IP every few checks and on every
+      # throttle. A paid WH_PROXY secret, when set, is used instead. If Tor cannot start the run continues
+      # without it (never fails the job).
+      - name: Start Tor (one exit country per scanned country)
+        if: env.MODE != 'estimate'
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq tor
+          sudo systemctl stop tor 2>/dev/null || true
+          LIST=$(python -c "import os,run_weekly;print(' '.join(run_weekly.normalize_countries(os.environ['COUNTRIES'])))")
+          i=0; MAP=""
+          for cc in $LIST; do
+            lc=$(echo "$cc" | tr 'A-Z' 'a-z'); socks=$((9100+i)); ctrl=$((9200+i))
+            mkdir -p "/tmp/tor_$cc" && chmod 700 "/tmp/tor_$cc"
+            cat > "/tmp/torrc_$cc" <<EOF2
+          SocksPort 127.0.0.1:$socks
+          ControlPort 127.0.0.1:$ctrl
+          CookieAuthentication 0
+          DataDirectory /tmp/tor_$cc
+          ExitNodes {$lc}
+          StrictNodes 0
+          MaxCircuitDirtiness 10
+          NewCircuitPeriod 10
+          ClientOnly 1
+          Log notice file /tmp/tor_$cc.log
+          EOF2
+            nohup tor -f "/tmp/torrc_$cc" >/dev/null 2>&1 &
+            MAP="$MAP$cc:$socks:$ctrl,"
+            i=$((i+1))
+          done
+          for cc in $LIST; do
+            for t in $(seq 1 60); do grep -q "Bootstrapped 100%" "/tmp/tor_$cc.log" 2>/dev/null && break; sleep 2; done
+            grep -q "Bootstrapped 100%" "/tmp/tor_$cc.log" 2>/dev/null && echo "Tor $cc ready" || echo "Tor $cc NOT ready"
+          done
+          echo "WH_TOR_PORTS=${MAP%,}" >> "$GITHUB_ENV"
+
+      # Ad pictures already downloaded by an earlier run are reused (same bytes, so the report is identical):
+      # rebuild / verify no longer download thousands of pictures again.
+      - name: Cache the ad pictures
+        if: env.MODE != 'estimate'
+        uses: actions/cache@v4
+        with:
+          path: .thumb_cache
+          key: thumbs-${{ github.run_id }}
+          restore-keys: thumbs-
+
+      # The tests are a safety net, not a gate: a failing test is reported (test.log + job summary) but
+      # never stops an estimate, a scan (which spends credits) or a rebuild.
+      - name: Run the test suite
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python -m pytest tests -q 2>&1 | tee test.log
+
+      # Zeros written by the old checker were never double-checked (that is how a page running 52 ads got
+      # "0"). They are removed here so every one of those pages is verified again on Meta.
+      - name: Drop unconfirmed zeros from the verification cache
+        if: env.MODE != 'estimate'
+        run: python verify_active.py --purge-legacy-zeros
+
+      - name: Show inputs
+        run: |
+          echo "mode=$MODE"
+          echo "from='$DATE_FROM' to='$DATE_TO'"
+          echo "countries=$COUNTRIES max_calls=$MAX_CALLS resume=$RESUME keep_all_stores=$KEEP_ALL"
+          echo "execution=${{ github.run_id }} build=#${{ github.run_number }}"
+
+      - name: "Fresh run: clear the previous execution workspace"
+        run: |
+          rm -rf work run_artifact
+          mkdir -p work
+
+      - name: Run the scan
+        shell: bash
+        env:
+          WH_API_KEY: ${{ secrets.WH_API_KEY }}
+          # A scan verifies the unverified pages on Meta (bounded); estimate/rebuild never need a browser.
+          WH_VERIFY_LIVE: ${{ env.MODE != 'estimate' && '1' || '0' }}
+          # Exact Meta count for EVERY store: no cap (0), each country gets an equal share of the time left.
+          # Answers older than 72 h are re-checked; rebuild keeps a month of answers.
+          WH_VERIFY_LIMIT: "0"
+          # Fewer tabs + a pause between checks = fewer Meta rate limits = more pages verified.
+          # Meta throttles GitHub's datacenter IPs. WITHOUT a proxy the run goes slowly (2 tabs, 1.5 s gap) so it
+          # is not blocked; WITH the WH_PROXY secret (rotating residential proxy) it goes fast (5 tabs).
+          WH_PROXY: ${{ secrets.WH_PROXY }}
+          WH_VERIFY_WORKERS: ${{ secrets.WH_PROXY != '' && '14' || '2' }}
+          WH_VERIFY_GAP: ${{ secrets.WH_PROXY != '' && '0.2' || '1.5' }}
+          WH_PROXY_ROTATE: "1"     # with a proxy, every check runs in its own context = its own IP
+          WH_POLL_MS: "400"
+          WH_THUMB_WORKERS: "24"
+          # When Meta throttles us the run cools down (2, 4, 6 ... max 15 min), opens a fresh browser session, goes slower and retries (max 8 times).
+          # The run keeps cooling down + retrying until EVERY page is verified or the time budget ends.
+          # Without a proxy waiting does not unblock the IP: stop at once, the next automatic round runs on a NEW machine.
+          WH_RATE_PAUSES: ${{ secrets.WH_PROXY != '' && '40' || '400' }}   # UPDATED LOGIC: without proxy Tor gets a new IP on every pause
+          WH_CHAIN_MAX_HOURS: "8"
+          WH_CHAIN_MAX_ROUNDS: "15"
+          WH_STRICT: "0"           # unverified pages (if Meta still blocks after all rounds) stay listed with a dash
+          WH_VERIFY_ROUNDS: ${{ secrets.WH_PROXY != '' && '6' || '0' }}   # extra rounds INSIDE the run (the workflow itself chains new runs)
+          WH_VERIFY_ROUND_WAIT: "600"
+          WH_RATE_PAUSE_SECONDS: ${{ secrets.WH_PROXY != '' && '120' || '12' }}
+          WH_RATE_PAUSE_MAX: ${{ secrets.WH_PROXY != '' && '900' || '60' }}
+          WH_TOR_ROTATE_EVERY: "5"
+          WH_TOR_WAIT_SECONDS: "11"
+          # Saves proxy bandwidth (pictures/fonts are never needed). Off without proxy: it can look like a bot.
+          WH_BLOCK_HEAVY: ${{ secrets.WH_PROXY != '' && '1' || '0' }}
+          # A zero is only accepted when the empty state stays unchanged this many seconds AND the
+          # "all ads" view of the same page confirms it (see verify_active.check_page).
+          WH_ZERO_SETTLE: "6"
+          WH_VERIFY_FRESH_HOURS: ${{ env.MODE != 'scan' && '720' || '72' }}   # UPDATED LOGIC: verify no longer drops older answers to "stale"
+          WH_KEEP_ALL_STORES: ${{ env.KEEP_ALL == 'true' && '1' || '0' }}
+        run: |
+          set -o pipefail
+          EXTRA=""
+          MAX_MIN=320          # a real scan: the rest of the 6 h job is kept for install, report, save, next round
+          case "$MODE" in
+            estimate) EXTRA="--estimate" ;;
+            # rebuild / verify are capped: the Meta checking stops after 45 minutes so the whole job (install,
+            # tests, checks, pictures, report) ends in about an hour. Answers found are saved in the cache,
+            # so the next run continues with what is still missing.
+            rebuild) EXTRA="--re-export"; MAX_MIN=45 ;;
+            verify)  EXTRA="--re-export"; MAX_MIN=150 ;;   # UPDATED LOGIC: more time per verify round (Tor is slower but not blocked)   # unverified pages continue in the next automatic round
+            *)        EXTRA="" ;;
+          esac
+          if [ "$MODE" = "scan" ] && [ "$RESUME" = "true" ]; then EXTRA="$EXTRA --resume"; fi
+          python run_weekly.py --countries "$COUNTRIES" --max-calls "$MAX_CALLS" \
+            --from "$DATE_FROM" --to "$DATE_TO" --max-minutes "$MAX_MIN" $EXTRA 2>&1 | tee run.log
+
+      - name: Save the scan progress (so a stopped run never spends a credit twice)
+        if: always() && env.MODE != 'estimate'
+        run: |
+          mkdir -p results/scan_data
+          for f in work/scan_*.json; do
+            if [ -f "$f" ]; then gzip -c "$f" > "results/scan_data/$(basename "$f").gz"; fi
+          done
+          true
+
+      # The artifact holds ONLY what THIS run produced. results/run_manifest.json is committed to the
+      # repository, so an old copy exists before the scan starts: it is used only when its
+      # workflow_run_id is this run's id. run_status.json always says what happened (with the log tail),
+      # and run.log / test.log are attached, so a failed run explains itself.
+      - name: Collect this run's files only
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os, shutil
+          from pathlib import Path
+
+          out = Path("run_artifact")
+          mode = os.environ.get("MODE", "")
+          if mode != "estimate":
+              shutil.rmtree(out, ignore_errors=True)
+          out.mkdir(exist_ok=True)
+          run_id = os.environ.get("GITHUB_RUN_ID", "")
+
+          def tail(name, n=40):
+              path = Path(name)
+              if not path.exists():
+                  return f"({name} was not produced: the step did not run)"
+              shutil.copy(path, out / name)
+              return "\n".join(path.read_text(encoding="utf-8", errors="replace").splitlines()[-n:])
+
+          status = {"workflow_run_id": run_id, "mode": mode, "report_produced": False, "reason": ""}
+          if mode == "estimate":
+              status["report_produced"] = any(out.glob("estimate_report_*.html"))
+              status["reason"] = "" if status["report_produced"] else "the estimate produced no report"
+          else:
+              try:
+                  manifest = json.loads(Path("results/run_manifest.json").read_text(encoding="utf-8"))
+              except Exception as exc:
+                  manifest = {}
+                  status["reason"] = f"no run manifest was written by this run ({exc})"
+              if manifest and str(manifest.get("workflow_run_id") or "") != run_id:
+                  status["reason"] = "the run manifest belongs to an earlier run: this run produced nothing"
+                  manifest = {}
+              if manifest:
+                  status.update(outcome=manifest.get("outcome"), note=manifest.get("note"),
+                                period=f"{manifest.get('from')} to {manifest.get('to')}",
+                                failed_countries=manifest.get("failed_countries"),
+                                partial_countries=manifest.get("partial_countries"))
+                  for key in ("html_path", "workbook_path"):
+                      path = manifest.get(key) or ""
+                      if path and Path(path).exists():
+                          shutil.copy(path, out / Path(path).name)
+                          status["report_produced"] = True
+                  own = Path("results") / f"run_manifest_{manifest.get('from', '')}.json"
+                  if own.exists():
+                      shutil.copy(own, out / own.name)
+                  if not status["report_produced"]:
+                      status["reason"] = manifest.get("note") or "this run published no report"
+          status["run_log_tail"] = tail("run.log")
+          status["test_log_tail"] = tail("test.log", 15)
+          (out / "run_status.json").write_text(json.dumps(status, indent=2, ensure_ascii=False) + "\n",
+                                               encoding="utf-8")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as handle:
+                  handle.write(f"### Run status\n\n- mode: `{mode}`\n- report produced: **{status['report_produced']}**\n"
+                               f"- reason: {status['reason'] or '-'}\n\n#### Last lines of the run log\n"
+                               f"```\n{status['run_log_tail']}\n```\n\n#### Tests\n```\n{status['test_log_tail']}\n```\n")
+          print("collected:", sorted(p.name for p in out.iterdir()))
+          print(json.dumps({k: v for k, v in status.items() if "tail" not in k}, indent=2))
+          PY
+
+      - name: Upload the report files of this run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.MODE == 'estimate' && 'estimate-report' || 'competitors-week' }}-${{ github.run_number }}-${{ github.run_id }}
+          path: run_artifact
+          retention-days: 90
+          if-no-files-found: ignore
+
+      # Decides BEFORE the results are committed (the chain state is committed with them).
+      - name: Chain - are pages still unverified?
+        id: chain
+        if: ${{ !cancelled() && env.MODE != 'estimate' }}
+        run: python chain_control.py end
+
+      # Saving to the repository must never turn a good run red: the report is already in the artifact.
+      # "-X theirs" while rebasing keeps THIS run's files when the branch moved in the meantime
+      # (this is what caused the run_manifest.json merge conflict).
+      - name: Save the results in the repository
+        if: always() && env.MODE != 'estimate'
+        run: |
+          git config user.name "wh-scanner bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add results
+          if git diff --cached --quiet; then
+            echo "Nothing new to save."
+            exit 0
+          fi
+          git commit -m "Weekly scan results ($(date -u +%F), run ${{ github.run_number }})"
+          for attempt in 1 2 3 4; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            if git rebase -X theirs "origin/${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "Results saved."
+              exit 0
+            fi
+            echo "save attempt $attempt failed, retrying"
+            git rebase --abort 2>/dev/null || true
+            sleep 5
+          done
+          echo "::warning::Results could not be pushed to the repository. The report is still in the run artifact."
+          exit 0
+
+      # Starts the next verification round (mode verify = no scan, no credit) on a NEW runner = a NEW IP.
+      # Runs only when the chain decided to continue; a cancelled run never gets here.
+      - name: Chain - start the next automatic round
+        if: ${{ !cancelled() && steps.chain.outputs.continue == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "${{ steps.chain.outputs.reason }}"
+          gh workflow run weekly.yml --ref "${GITHUB_REF_NAME}" \
+            -f mode=verify \
+            -f date_from="${{ steps.chain.outputs.date_from }}" \
+            -f date_to="${{ steps.chain.outputs.date_to }}" \
+            -f countries="${{ steps.chain.outputs.countries }}"
