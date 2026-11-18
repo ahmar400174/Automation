@@ -1,0 +1,11 @@
+uploads/
+exports/
+cache/
+__pycache__/
+*.sqlite3*
+selection.json
+reference.csv
+public_findings.json
+*.csv
+*.xlsx
+*.xlsm

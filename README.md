@@ -1,5 +1,9 @@
 # Signal Desk — self-hosted Meta page verification
 
+## Spreadsheet verifier
+
+The separate [spreadsheet verifier](salon_verifier/README.md) checks CSV and Excel files, fills missing business details found on supplied company websites, and exports updated data with consistent verification columns. Start it with `python salon_verifier/app.py --port 8771` and open `http://127.0.0.1:8771`. Uploaded files, exports, and its local database are excluded from Git.
+
 Signal Desk is a private research workspace built from the supplied WinningHunter scanner project. It imports saved competitor-page data, checks page IDs against Meta’s public Ad Library, and presents reports, check times, and verification state in a responsive dashboard.
 
 **It does not require a Facebook login or reveal a client identity.** A Meta result may be rounded; rounded values retain a `~` marker. Unknown, blocked, stale, failed, and confirmed inactive results are not converted into made-up counts.
